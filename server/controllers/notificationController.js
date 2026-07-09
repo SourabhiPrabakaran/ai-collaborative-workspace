@@ -80,3 +80,28 @@ export const markAllNotificationsAsRead = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * @desc    Delete a single notification
+ * @route   DELETE /api/notifications/:id
+ * @access  Private
+ */
+export const deleteNotification = async (req, res, next) => {
+  try {
+    const userId = req.user._id;
+    const notificationId = req.params.id;
+
+    const notification = await Notification.findOneAndDelete({ _id: notificationId, user: userId });
+    if (!notification) {
+      res.status(404);
+      return next(new Error('Notification not found'));
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};

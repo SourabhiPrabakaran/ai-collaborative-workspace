@@ -5,6 +5,7 @@ import Folder from '../models/Folder.js';
 import User from '../models/User.js';
 import VersionHistory from '../models/VersionHistory.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { logActivity } from '../utils/activityLogger.js';
 import { createNotification, NOTIFICATION_TYPES } from '../services/notificationService.js';
 import { validateCreateDocumentInput, validateUpdateDocumentInput } from '../validators/documentValidator.js';
 
@@ -47,6 +48,15 @@ export const createDocument = async (req, res, next) => {
     res.status(201).json({
       success: true,
       data: document
+    });
+
+    // Log Activity Timeline
+    await logActivity({
+      workspace,
+      document: document._id,
+      user: userId,
+      type: 'DOCUMENT_CREATED',
+      details: { title: document.title }
     });
   } catch (error) {
     next(error);
@@ -107,7 +117,15 @@ export const updateDocument = async (req, res, next) => {
       document.folder = folder;
     }
 
-    if (title !== undefined) document.title = title;
+    const oldTitle = document.title;
+    let titleChanged = false;
+
+    if (title !== undefined) {
+      if (title !== oldTitle) {
+        titleChanged = true;
+      }
+      document.title = title;
+    }
     if (emoji !== undefined) document.emoji = emoji;
     if (isPublic !== undefined) document.isPublic = isPublic;
     if (isArchived !== undefined) document.isArchived = isArchived;
@@ -118,16 +136,41 @@ export const updateDocument = async (req, res, next) => {
         document.content = content;
         document.markModified('content');
         
+        const versionCount = await VersionHistory.countDocuments({ document: document._id });
+        const versionNumber = versionCount + 1;
+
         await VersionHistory.create({
           document: document._id,
           content,
-          createdBy: userId
+          createdBy: userId,
+          version: versionNumber,
+          description: 'REST API Save'
+        });
+
+        // Log Activity Timeline
+        await logActivity({
+          workspace: document.workspace,
+          document: document._id,
+          user: userId,
+          type: 'VERSION_CREATED',
+          details: { versionNumber, autoSaved: false, description: 'REST API Save' }
         });
       }
     }
 
     document.lastEditedBy = userId;
     await document.save();
+
+    // Log Activity Timeline for Rename
+    if (titleChanged) {
+      await logActivity({
+        workspace: document.workspace,
+        document: document._id,
+        user: userId,
+        type: 'DOCUMENT_RENAMED',
+        details: { oldTitle, newTitle: document.title }
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -325,6 +368,15 @@ export const shareDocument = async (req, res, next) => {
       });
     }
 
+    // Log Activity Timeline
+    await logActivity({
+      workspace: document.workspace,
+      document: document._id,
+      user: req.user._id,
+      type: 'ROLE_CHANGED',
+      details: { targetUserId: targetUser._id, targetUserName: targetUser.fullName, role, scope: 'document' }
+    });
+
     res.status(200).json({
       success: true,
       message: 'Collaborator added successfully',
@@ -410,6 +462,15 @@ export const updateDocumentCollaboratorRole = async (req, res, next) => {
         link: `/workspace/${document.workspace}/document/${document._id}`
       });
     }
+
+    // Log Activity Timeline
+    await logActivity({
+      workspace: document.workspace,
+      document: document._id,
+      user: req.user._id,
+      type: 'ROLE_CHANGED',
+      details: { targetUserId, targetUserName: targetUserRecord?.fullName, role, scope: 'document' }
+    });
 
     res.status(200).json({
       success: true,
@@ -518,6 +579,15 @@ export const toggleDocumentPublicLink = async (req, res, next) => {
         }
       }
     }
+
+    // Log Activity Timeline
+    await logActivity({
+      workspace: document.workspace,
+      document: document._id,
+      user: req.user._id,
+      type: isPublic ? 'PUBLIC_LINK_ENABLED' : 'PUBLIC_LINK_DISABLED',
+      details: { isPublic }
+    });
 
     res.status(200).json({
       success: true,

@@ -3,6 +3,7 @@ import Comment from '../models/Comment.js';
 import User from '../models/User.js';
 import Document from '../models/Document.js';
 import { createNotification, NOTIFICATION_TYPES } from '../services/notificationService.js';
+import { logActivity } from '../utils/activityLogger.js';
 
 /**
  * @desc    Create a new comment or threaded reply
@@ -65,6 +66,15 @@ export const createComment = async (req, res, next) => {
       parentComment: parentComment || null,
       content: content.trim(),
       mentions: mentionIds
+    });
+
+    // Log Activity Feed
+    await logActivity({
+      workspace: document.workspace,
+      document: documentId,
+      user: userId,
+      type: 'COMMENT_CREATED',
+      details: { commentId: comment._id, content: comment.content.substring(0, 40), isReply: !!parentComment }
     });
 
     // 4. Threaded reply notifications
@@ -267,6 +277,18 @@ export const resolveComment = async (req, res, next) => {
 
     comment.resolved = resolved;
     await comment.save();
+
+    // Log Activity Feed
+    const document = await Document.findById(comment.document);
+    if (document) {
+      await logActivity({
+        workspace: document.workspace,
+        document: document._id,
+        user: req.user._id,
+        type: 'COMMENT_RESOLVED',
+        details: { commentId, resolved }
+      });
+    }
 
     res.status(200).json({
       success: true,

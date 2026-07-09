@@ -12,6 +12,9 @@ import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
 import { useSocket } from '../context/SocketContext.jsx';
 import CommentSidebar from '../components/CommentSidebar.jsx';
+import VersionHistorySidebar from '../components/VersionHistorySidebar.jsx';
+import ActivityTimeline from '../components/ActivityTimeline.jsx';
+import RestoreVersionModal from '../components/RestoreVersionModal.jsx';
 
 const WorkspacePage = () => {
   const { workspaceId, documentId } = useParams();
@@ -27,6 +30,14 @@ const WorkspacePage = () => {
   const [commentSidebarOpen, setCommentSidebarOpen] = useState(false);
   const [activeCommentHighlightId, setActiveCommentHighlightId] = useState(null);
   const [commentsVersion, setCommentsVersion] = useState(0);
+
+  // Version history & Activity states
+  const [versionSidebarOpen, setVersionSidebarOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [previewVersionRecord, setPreviewVersionRecord] = useState(null);
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
+  const [restoreTargetVersion, setRestoreTargetVersion] = useState(null);
+  const [restoreLoading, setRestoreLoading] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [docLoading, setDocLoading] = useState(false);
@@ -290,6 +301,33 @@ const WorkspacePage = () => {
     }
   }, [archiveOpen]);
 
+  const handleRestoreConfirm = async (backupDescription) => {
+    if (!restoreTargetVersion) return;
+    try {
+      setRestoreLoading(true);
+      const res = await api.post(`/documents/${documentId}/versions/${restoreTargetVersion._id}/restore`, {
+        description: backupDescription
+      });
+      if (res.success) {
+        showToast(`Restored Version v${restoreTargetVersion.version} successfully!`, 'success');
+        setPreviewVersionRecord(null);
+        setRestoreModalOpen(false);
+        setRestoreTargetVersion(null);
+        setCommentsVersion(prev => prev + 1);
+        await fetchDocument();
+      }
+    } catch (err) {
+      showToast(err.message || 'Error restoring version', 'error');
+    } finally {
+      setRestoreLoading(false);
+    }
+  };
+
+  const handleRestoreTrigger = (version) => {
+    setRestoreTargetVersion(version);
+    setRestoreModalOpen(true);
+  };
+
   if (loading) {
     return <LoadingScreen message="Opening workspace..." />;
   }
@@ -320,7 +358,41 @@ const WorkspacePage = () => {
               onDelete={() => handlePermanentDeleteTrigger(documentId)}
               connected={connected}
               onlineUsers={onlineUsers}
+              onVersionToggle={() => {
+                setVersionSidebarOpen(!versionSidebarOpen);
+                setActivityOpen(false);
+                setCommentSidebarOpen(false);
+              }}
+              onActivityToggle={() => {
+                setActivityOpen(!activityOpen);
+                setVersionSidebarOpen(false);
+                setCommentSidebarOpen(false);
+              }}
             />
+
+            {/* Version Preview Banner */}
+            {previewVersionRecord && (
+              <div className="bg-purple-500/10 border-b border-purple-500/20 px-4 py-2 flex justify-between items-center text-xs shrink-0 select-none">
+                <span className="text-purple-500 font-bold flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                  Previewing Version v{previewVersionRecord.version} ({new Date(previewVersionRecord.createdAt).toLocaleString()}) • Read-Only Mode
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleRestoreTrigger(previewVersionRecord)}
+                    className="px-2 py-1 bg-purple-500 hover:bg-purple-600 text-white rounded font-bold text-[10px] transition-colors"
+                  >
+                    Restore this version
+                  </button>
+                  <button
+                    onClick={() => setPreviewVersionRecord(null)}
+                    className="px-2 py-1 bg-notion-hover-light dark:bg-notion-hover-dark text-notion-text-light dark:text-notion-text-dark rounded font-bold text-[10px] hover:opacity-85"
+                  >
+                    Exit Preview
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Editor Area with Sidebar wrapper */}
             <div className="flex-1 flex overflow-hidden min-h-0 w-full">
@@ -365,6 +437,7 @@ const WorkspacePage = () => {
                     {/* TipTap Rich Text Editor */}
                     <div className="mt-6">
                       <CollabEditor 
+                        key={`${documentId}-${previewVersionRecord?._id || 'collab'}`}
                         documentId={documentId} 
                         readOnly={docPermission === 'read'} 
                         onHighlightClick={(commentIds) => {
@@ -377,6 +450,7 @@ const WorkspacePage = () => {
                           setCommentSidebarOpen(true);
                         }}
                         allowViewerComments={documentDetails?.allowViewerComments}
+                        previewVersion={previewVersionRecord}
                       />
                     </div>
                   </motion.div>
@@ -393,7 +467,37 @@ const WorkspacePage = () => {
                 allowViewerComments={documentDetails?.allowViewerComments}
                 commentsVersion={commentsVersion}
               />
+
+              {/* Version History Sidebar */}
+              <VersionHistorySidebar
+                documentId={documentId}
+                isOpen={versionSidebarOpen}
+                onClose={() => setVersionSidebarOpen(false)}
+                onPreviewVersion={(version) => setPreviewVersionRecord(version)}
+                onRestoreTrigger={handleRestoreTrigger}
+                activePreviewId={previewVersionRecord?._id}
+                readOnly={docPermission === 'read'}
+              />
+
+              {/* Activity Timeline Sidebar */}
+              <ActivityTimeline
+                documentId={documentId}
+                isOpen={activityOpen}
+                onClose={() => setActivityOpen(false)}
+              />
             </div>
+
+            {/* Restore version confirmation dialog modal */}
+            <RestoreVersionModal
+              isOpen={restoreModalOpen}
+              onClose={() => {
+                setRestoreModalOpen(false);
+                setRestoreTargetVersion(null);
+              }}
+              onConfirm={handleRestoreConfirm}
+              version={restoreTargetVersion}
+              loading={restoreLoading}
+            />
           </>
         ) : (
           /* Empty/No Active Doc Splash Screen */

@@ -55,11 +55,15 @@ const CollabEditor = ({
   readOnly = false, 
   onHighlightClick, 
   onCommentCreated, 
-  allowViewerComments = false 
+  allowViewerComments = false,
+  previewVersion = null
 }) => {
   const { user } = useAuth();
   const { socket, connected, joinDocument, leaveDocument } = useSocket();
   const { showToast } = useToast();
+  
+  const isPreview = !!previewVersion;
+  const isEditable = !readOnly && !isPreview;
   
   // Custom Comment bubble trigger
   const [commentBubbleOpen, setCommentBubbleOpen] = useState(false);
@@ -124,8 +128,16 @@ const CollabEditor = ({
 
   // Initialize TipTap Editor with Collaboration & CollaborationCursor Extensions
   const editor = useEditor({
-    editable: !readOnly,
-    extensions: [
+    editable: isEditable,
+    content: isPreview ? previewVersion.content : undefined,
+    extensions: isPreview ? [
+      StarterKit,
+      Underline,
+      Placeholder.configure({
+        placeholder: "Viewing historical version (Read-Only)..."
+      }),
+      CommentMark
+    ] : [
       StarterKit.configure({
         history: false
       }),
@@ -235,9 +247,9 @@ const CollabEditor = ({
   // Dynamic Read-Only state update
   useEffect(() => {
     if (editor) {
-      editor.setEditable(!readOnly);
+      editor.setEditable(isEditable);
     }
-  }, [readOnly, editor]);
+  }, [readOnly, isPreview, editor]);
 
   // Apply selected slash command formatting
   const triggerSlashCommand = (index) => {
@@ -450,6 +462,7 @@ const CollabEditor = ({
 
   // Connect document room session and vector syncing listeners
   useEffect(() => {
+    if (isPreview) return;
     if (!socket || !connected || !documentId) return;
 
     joinDocument(documentId, ydoc.clientID);

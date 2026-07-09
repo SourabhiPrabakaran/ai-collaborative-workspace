@@ -15,6 +15,14 @@ const VersionHistorySchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  version: {
+    type: Number,
+    required: true
+  },
+  description: {
+    type: String,
+    default: ''
   }
 }, {
   timestamps: {

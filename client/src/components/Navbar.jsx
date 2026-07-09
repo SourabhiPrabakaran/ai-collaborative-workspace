@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Share, Trash, Inbox } from 'lucide-react';
+import { Share, Trash, Inbox, History, Activity as ActivityIcon } from 'lucide-react';
 import ShareModal from './ShareModal.jsx';
 import NotificationBell from './NotificationBell.jsx';
 
@@ -9,7 +9,9 @@ const Navbar = ({
   onDelete, 
   onRestore, 
   connected, 
-  onlineUsers = [] 
+  onlineUsers = [],
+  onVersionToggle,
+  onActivityToggle
 }) => {
   const [sharingOpen, setSharingOpen] = useState(false);
 
@@ -57,6 +59,24 @@ const Navbar = ({
 
         {/* Notification Bell */}
         <NotificationBell />
+
+        {/* Activity Timeline Toggle */}
+        <button
+          onClick={onActivityToggle}
+          className="p-1.5 rounded-lg hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark text-notion-text-mutedLight dark:text-notion-text-mutedDark transition-all outline-none"
+          title="Activity Timeline"
+        >
+          <ActivityIcon className="w-4 h-4" />
+        </button>
+
+        {/* Version History Toggle */}
+        <button
+          onClick={onVersionToggle}
+          className="p-1.5 rounded-lg hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark text-notion-text-mutedLight dark:text-notion-text-mutedDark transition-all outline-none"
+          title="Version History"
+        >
+          <History className="w-4 h-4" />
+        </button>
 
         {doc?.isArchived ? (
           <button

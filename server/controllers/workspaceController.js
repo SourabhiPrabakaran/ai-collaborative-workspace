@@ -4,6 +4,7 @@ import Document from '../models/Document.js';
 import User from '../models/User.js';
 import VersionHistory from '../models/VersionHistory.js';
 import { logAudit } from '../utils/auditLogger.js';
+import { logActivity } from '../utils/activityLogger.js';
 import { createNotification, NOTIFICATION_TYPES } from '../services/notificationService.js';
 import { validateCreateWorkspaceInput, validateUpdateWorkspaceInput } from '../validators/workspaceValidator.js';
 
@@ -248,6 +249,14 @@ export const shareWorkspace = async (req, res, next) => {
       });
     }
 
+    // Log Activity Timeline
+    await logActivity({
+      workspace: workspaceId,
+      user: req.user._id,
+      type: 'USER_INVITED',
+      details: { email, role, targetUserId: targetUser._id, workspaceName: workspace.name }
+    });
+
     res.status(200).json({
       success: true,
       message: 'Invitation sent successfully',
@@ -413,6 +422,14 @@ export const updateWorkspaceMemberRole = async (req, res, next) => {
         link: `/workspace/${workspaceId}`
       });
     }
+
+    // Log Activity Timeline
+    await logActivity({
+      workspace: workspaceId,
+      user: currentUserId,
+      type: 'ROLE_CHANGED',
+      details: { targetUserId, targetUserName: targetUserRecord?.fullName, role, scope: 'workspace' }
+    });
 
     res.status(200).json({
       success: true,

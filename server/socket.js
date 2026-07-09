@@ -5,6 +5,8 @@ import { Schema } from 'prosemirror-model';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import User from './models/User.js';
 import Document from './models/Document.js';
+import VersionHistory from './models/VersionHistory.js';
+import { logActivity } from './utils/activityLogger.js';
 
 // 1. Define server-side ProseMirror schema to parse and serialize TipTap JSON
 const docSchema = new Schema({
@@ -147,12 +149,58 @@ export const initSocket = (io) => {
     }
   });
 
+  // Auto-snapshot creator with duplicate prevention and 10-minute cooldown
+  const createAutoSnapshot = async (docId, contentJson, userId) => {
+    try {
+      const latest = await VersionHistory.findOne({ document: docId }).sort({ createdAt: -1 });
+      const COOLDOWN_MS = 10 * 60 * 1000;
+
+      if (latest) {
+        const timeDiff = Date.now() - new Date(latest.createdAt).getTime();
+        const contentUnchanged = JSON.stringify(contentJson) === JSON.stringify(latest.content);
+        if (contentUnchanged || timeDiff < COOLDOWN_MS) {
+          return;
+        }
+      }
+
+      const docRecord = await Document.findById(docId);
+      if (!docRecord) return;
+
+      const versionCount = await VersionHistory.countDocuments({ document: docId });
+      const versionNumber = versionCount + 1;
+
+      await VersionHistory.create({
+        document: docId,
+        content: contentJson,
+        createdBy: userId,
+        version: versionNumber,
+        description: 'Auto-saved snapshot'
+      });
+
+      await logActivity({
+        workspace: docRecord.workspace,
+        document: docId,
+        user: userId,
+        type: 'VERSION_CREATED',
+        details: { versionNumber, autoSaved: true }
+      });
+
+      console.log(`[VersionHistory] Auto-created snapshot v${versionNumber} for document ${docId}`);
+    } catch (err) {
+      console.error('[VersionHistory] Error creating auto-snapshot:', err.message);
+    }
+  };
+
   // Helper function to persist a Y.Doc to MongoDB
   const persistDocState = async (docId, session) => {
     try {
       const contentJson = yDocToProsemirrorJSON(session.ydoc, 'default');
       await Document.findByIdAndUpdate(docId, { content: contentJson });
       console.log(`[Yjs] Successfully saved document ${docId} to MongoDB`);
+
+      if (session.lastEditBy) {
+        await createAutoSnapshot(docId, contentJson, session.lastEditBy);
+      }
     } catch (err) {
       console.error(`[Yjs] Failed to save document ${docId} to MongoDB:`, err.message);
     }
@@ -337,9 +385,12 @@ export const initSocket = (io) => {
       }
     });
 
-    const handleYjsUpdateReceived = (session, documentId, update) => {
+    const handleYjsUpdateReceived = (session, documentId, update, userId) => {
       try {
         Y.applyUpdate(session.ydoc, new Uint8Array(update));
+        if (userId) {
+          session.lastEditBy = userId;
+        }
         if (!session.saveTimeout) {
           session.saveTimeout = setTimeout(async () => {
             session.saveTimeout = null;
@@ -354,7 +405,7 @@ export const initSocket = (io) => {
     socket.on('yjs-sync-step-2', ({ documentId, update }) => {
       const session = yjsSessions.get(documentId);
       if (session) {
-        handleYjsUpdateReceived(session, documentId, update);
+        handleYjsUpdateReceived(session, documentId, update, socket.user._id);
         socket.to(documentId).emit('yjs-update', { documentId, update });
       }
     });
@@ -362,7 +413,7 @@ export const initSocket = (io) => {
     socket.on('yjs-update', ({ documentId, update }) => {
       const session = yjsSessions.get(documentId);
       if (session) {
-        handleYjsUpdateReceived(session, documentId, update);
+        handleYjsUpdateReceived(session, documentId, update, socket.user._id);
         socket.to(documentId).emit('yjs-update', { documentId, update });
       }
     });
@@ -388,4 +439,32 @@ export const initSocket = (io) => {
       }
     });
   });
+};
+
+// Exported helper to apply a restored snapshot to an active in-memory Yjs session and broadcast it
+export const restoreDocumentInSession = (documentId, restoredJson) => {
+  const session = yjsSessions.get(documentId.toString());
+  if (session) {
+    try {
+      session.ydoc.transact(() => {
+        const xmlFragment = session.ydoc.get('default', Y.XmlFragment);
+        if (xmlFragment.length > 0) {
+          xmlFragment.delete(0, xmlFragment.length);
+        }
+
+        const tempYdoc = prosemirrorJSONToYDoc(docSchema, restoredJson, 'default');
+        const stateUpdate = Y.encodeStateAsUpdate(tempYdoc);
+        Y.applyUpdate(session.ydoc, stateUpdate);
+        tempYdoc.destroy();
+      });
+
+      const update = Y.encodeStateAsUpdate(session.ydoc);
+      ioInstance.to(documentId.toString()).emit('yjs-update', { documentId, update });
+      console.log(`[Yjs] Broadcasted restored version for document ${documentId}`);
+      return true;
+    } catch (err) {
+      console.error('[Yjs] Error executing Yjs session restore:', err.message);
+    }
+  }
+  return false;
 };

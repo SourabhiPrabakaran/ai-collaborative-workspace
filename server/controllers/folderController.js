@@ -2,6 +2,7 @@ import Folder from '../models/Folder.js';
 import Document from '../models/Document.js';
 import VersionHistory from '../models/VersionHistory.js';
 import { validateCreateFolderInput, validateUpdateFolderInput } from '../validators/folderValidator.js';
+import { logActivity } from '../utils/activityLogger.js';
 
 /**
  * Helper: Recursive folder content deletion (folders, sub-folders, documents, version histories)
@@ -109,6 +110,11 @@ export const updateFolder = async (req, res, next) => {
       return next(new Error('Folder not found'));
     }
 
+    const oldName = folder.name;
+    const oldParentId = folder.parentFolder;
+    let isRenamed = false;
+    let isMoved = false;
+
     // Handle Folder Move with safety checks
     if (parentFolder !== undefined) {
       if (parentFolder !== null) {
@@ -138,6 +144,9 @@ export const updateFolder = async (req, res, next) => {
         }
       }
 
+      if (String(parentFolder) !== String(folder.parentFolder)) {
+        isMoved = true;
+      }
       folder.parentFolder = parentFolder;
     }
 
@@ -156,10 +165,36 @@ export const updateFolder = async (req, res, next) => {
         return next(new Error(`A folder named "${name}" already exists at this level`));
       }
 
+      if (name.trim() !== oldName) {
+        isRenamed = true;
+      }
       folder.name = name.trim();
     }
 
     await folder.save();
+
+    // Log Activity Timeline
+    if (isRenamed) {
+      await logActivity({
+        workspace: folder.workspace,
+        user: req.user._id,
+        type: 'FOLDER_RENAMED',
+        details: { oldName, newName: folder.name, folderId: folder._id }
+      });
+    }
+    if (isMoved) {
+      await logActivity({
+        workspace: folder.workspace,
+        user: req.user._id,
+        type: 'FOLDER_MOVED',
+        details: { 
+          folderName: folder.name, 
+          folderId: folder._id,
+          oldParentId, 
+          newParentId: folder.parentFolder 
+        }
+      });
+    }
 
     res.status(200).json({
       success: true,

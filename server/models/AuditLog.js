@@ -16,7 +16,8 @@ const AuditLogSchema = new mongoose.Schema({
       'changed role',
       'enabled public link',
       'disabled public link',
-      'ownership transfer'
+      'ownership transfer',
+      'restored version'
     ]
   },
   workspace: {

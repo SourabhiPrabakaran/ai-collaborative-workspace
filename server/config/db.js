@@ -5,6 +5,9 @@ const connectDB = async () => {
   
   const options = {
     autoIndex: true, // Build indexes
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000
   };
 
   try {

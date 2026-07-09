@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb_prod
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+
+  server:
+    build: ./server
+    container_name: express_server_prod
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGODB_URI=mongodb://mongodb:27017/ai_workspace
+      - JWT_SECRET=prod_super_secret_jwt_key_change_in_real_deployment
+      - NODE_ENV=production
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - CLIENT_URL=http://localhost
+    depends_on:
+      - mongodb
+    restart: always
+
+  client:
+    build: ./client
+    container_name: nginx_client_prod
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+    restart: always
+
+volumes:
+  mongo_data:

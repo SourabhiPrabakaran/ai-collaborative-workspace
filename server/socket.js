@@ -113,7 +113,16 @@ const presenceMap = new Map();
 // In-memory Yjs sessions: documentId -> { ydoc, awareness, userCount, saveTimeout }
 const yjsSessions = new Map();
 
+let ioInstance = null;
+
+export const sendLiveNotification = (userId, notification) => {
+  if (ioInstance) {
+    ioInstance.to(`user:${userId.toString()}`).emit('notification', notification);
+  }
+};
+
 export const initSocket = (io) => {
+  ioInstance = io;
   // Socket.io Authentication Middleware via secure HTTP-only cookie JWT
   io.use(async (socket, next) => {
     try {
@@ -205,7 +214,11 @@ export const initSocket = (io) => {
 
   // Connection Listener
   io.on('connection', (socket) => {
+    const userId = socket.user._id.toString();
     console.log(`[Socket.io] Authenticated user connected: ${socket.user.fullName} (${socket.id})`);
+    
+    // Join personal user room for targeted notifications
+    socket.join(`user:${userId}`);
 
     // Event: User joins document room
     socket.on('join-document', async ({ documentId, clientID }) => {

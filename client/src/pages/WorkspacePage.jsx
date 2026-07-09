@@ -10,6 +10,8 @@ import DialogModal from '../components/DialogModal.jsx';
 import CollabEditor from '../components/Editor/CollabEditor.jsx';
 import { useDebounce } from '../hooks/useDebounce.js';
 import { useToast } from '../context/ToastContext.jsx';
+import { useSocket } from '../context/SocketContext.jsx';
+import CommentSidebar from '../components/CommentSidebar.jsx';
 
 const WorkspacePage = () => {
   const { workspaceId, documentId } = useParams();
@@ -20,6 +22,11 @@ const WorkspacePage = () => {
   const [workspace, setWorkspace] = useState(null);
   const [tree, setTree] = useState({ folders: [], documents: [] });
   const [documentDetails, setDocumentDetails] = useState(null);
+
+  // Comments & Highlights states
+  const [commentSidebarOpen, setCommentSidebarOpen] = useState(false);
+  const [activeCommentHighlightId, setActiveCommentHighlightId] = useState(null);
+  const [commentsVersion, setCommentsVersion] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [docLoading, setDocLoading] = useState(false);
@@ -38,6 +45,7 @@ const WorkspacePage = () => {
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [archivedDocs, setArchivedDocs] = useState([]);
   const [archiveLoading, setArchiveLoading] = useState(false);
+  const [docPermission, setDocPermission] = useState('write');
 
   // Interactive Modals
   const [activeModal, setActiveModal] = useState(null); // 'create-folder' | 'delete-doc'
@@ -86,6 +94,7 @@ const WorkspacePage = () => {
       if (response.success && response.data) {
         const doc = response.data;
         setDocumentDetails(doc);
+        setDocPermission(response.permission || 'write');
         initialFetchRef.current = true; // prevent save triggers on load
         setTitle(doc.title);
         setEmoji(doc.emoji || '📄');
@@ -104,6 +113,7 @@ const WorkspacePage = () => {
 
   // 3. Document Auto-Save Logic (Title & Emoji only)
   const handleAutoSave = async () => {
+    if (docPermission === 'read') return;
     if (initialFetchRef.current) {
       initialFetchRef.current = false;
       return;
@@ -312,49 +322,77 @@ const WorkspacePage = () => {
               onlineUsers={onlineUsers}
             />
 
-            {/* Editor Area */}
-            <div className="flex-1 overflow-y-auto px-16 py-10 max-w-4xl w-full mx-auto space-y-6">
-              {docLoading ? (
-                <div className="space-y-4 animate-pulse pt-10">
-                  <div className="w-16 h-16 bg-notion-border-light dark:bg-notion-border-dark rounded-xl"></div>
-                  <div className="w-3/4 h-10 bg-notion-border-light dark:bg-notion-border-dark rounded-lg"></div>
-                  <div className="w-full h-40 bg-notion-border-light dark:bg-notion-border-dark rounded-lg"></div>
-                </div>
-              ) : (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="space-y-6"
-                >
-                  {/* Emoji & Title Selectors */}
-                  <div className="flex items-center gap-4">
-                    <select
-                      value={emoji}
-                      aria-label="Select Document Emoji"
-                      onChange={(e) => setEmoji(e.target.value)}
-                      className="text-4xl p-1 bg-transparent hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark rounded-xl cursor-pointer focus:outline-none select-none"
-                    >
-                      {['📄', '📝', '💡', '🎨', '💼', '🚀', '📅', '🔐', '💻', '💡', '⚠️'].map(em => (
-                        <option key={em} value={em}>{em}</option>
-                      ))}
-                    </select>
-
-                    <input
-                      type="text"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      className="flex-1 bg-transparent text-3xl font-bold tracking-tight focus:outline-none border-b border-transparent focus:border-notion-border-light dark:focus:border-notion-border-dark pb-1"
-                      placeholder="Untitled Document"
-                      aria-label="Document Title"
-                    />
+            {/* Editor Area with Sidebar wrapper */}
+            <div className="flex-1 flex overflow-hidden min-h-0 w-full">
+              <div className="flex-1 overflow-y-auto px-16 py-10 max-w-4xl w-full mx-auto space-y-6">
+                {docLoading ? (
+                  <div className="space-y-4 animate-pulse pt-10">
+                    <div className="w-16 h-16 bg-notion-border-light dark:bg-notion-border-dark rounded-xl"></div>
+                    <div className="w-3/4 h-10 bg-notion-border-light dark:bg-notion-border-dark rounded-lg"></div>
+                    <div className="w-full h-40 bg-notion-border-light dark:bg-notion-border-dark rounded-lg"></div>
                   </div>
+                ) : (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="space-y-6"
+                  >
+                    {/* Emoji & Title Selectors */}
+                    <div className="flex items-center gap-4">
+                      <select
+                        value={emoji}
+                        aria-label="Select Document Emoji"
+                        onChange={(e) => setEmoji(e.target.value)}
+                        disabled={docPermission === 'read'}
+                        className="text-4xl p-1 bg-transparent hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark rounded-xl cursor-pointer focus:outline-none select-none disabled:cursor-not-allowed"
+                      >
+                        {['📄', '📝', '💡', '🎨', '💼', '🚀', '📅', '🔐', '💻', '💡', '⚠️'].map(em => (
+                          <option key={em} value={em}>{em}</option>
+                        ))}
+                      </select>
 
-                  {/* TipTap Rich Text Editor */}
-                  <div className="mt-6">
-                    <CollabEditor documentId={documentId} />
-                  </div>
-                </motion.div>
-              )}
+                      <input
+                        type="text"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        disabled={docPermission === 'read'}
+                        className="flex-1 bg-transparent text-3xl font-bold tracking-tight focus:outline-none border-b border-transparent focus:border-notion-border-light dark:focus:border-notion-border-dark pb-1 disabled:cursor-not-allowed"
+                        placeholder="Untitled Document"
+                        aria-label="Document Title"
+                      />
+                    </div>
+
+                    {/* TipTap Rich Text Editor */}
+                    <div className="mt-6">
+                      <CollabEditor 
+                        documentId={documentId} 
+                        readOnly={docPermission === 'read'} 
+                        onHighlightClick={(commentIds) => {
+                          setActiveCommentHighlightId(commentIds);
+                          setCommentSidebarOpen(true);
+                        }}
+                        onCommentCreated={(id) => {
+                          setCommentsVersion(prev => prev + 1);
+                          setActiveCommentHighlightId(id);
+                          setCommentSidebarOpen(true);
+                        }}
+                        allowViewerComments={documentDetails?.allowViewerComments}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+
+              {/* Comment Sidebar */}
+              <CommentSidebar
+                documentId={documentId}
+                isOpen={commentSidebarOpen}
+                onClose={() => setCommentSidebarOpen(false)}
+                activeHighlightId={activeCommentHighlightId}
+                readOnly={docPermission === 'read'}
+                allowViewerComments={documentDetails?.allowViewerComments}
+                commentsVersion={commentsVersion}
+              />
             </div>
           </>
         ) : (

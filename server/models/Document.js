@@ -31,6 +31,15 @@ const DocumentSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  publicToken: {
+    type: String,
+    default: null,
+    index: true
+  },
+  allowViewerComments: {
+    type: Boolean,
+    default: false
+  },
   isArchived: {
     type: Boolean,
     default: false,
@@ -48,12 +57,13 @@ const DocumentSchema = new mongoose.Schema({
   collaborators: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'User',
+      required: true
     },
-    permission: {
+    role: {
       type: String,
-      enum: Object.values(PERMISSIONS),
-      default: PERMISSIONS.WRITE
+      enum: ['owner', 'admin', 'editor', 'viewer'],
+      default: 'editor'
     }
   }]
 }, {

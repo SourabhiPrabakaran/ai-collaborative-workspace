@@ -11,6 +11,7 @@ const Dashboard = () => {
   const { user, logout } = useAuth();
   const { showToast } = useToast();
   const [workspaces, setWorkspaces] = useState([]);
+  const [invitations, setInvitations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
@@ -20,13 +21,33 @@ const Dashboard = () => {
 
   const fetchWorkspaces = async () => {
     try {
-      const response = await api.get('/workspaces');
-      if (response.success && response.data) {
-        setWorkspaces(response.data);
+      const [wsResponse, inviteResponse] = await Promise.all([
+        api.get('/workspaces'),
+        api.get('/workspaces/invitations')
+      ]);
+      if (wsResponse.success && wsResponse.data) {
+        setWorkspaces(wsResponse.data);
+      }
+      if (inviteResponse.success && inviteResponse.data) {
+        setInvitations(inviteResponse.data);
       }
     } catch (err) {
       showToast(err.message || 'Failed to load workspaces', 'error');
     } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAcceptInvitation = async (workspaceId) => {
+    try {
+      setLoading(true);
+      const res = await api.post(`/workspaces/${workspaceId}/accept`);
+      if (res.success) {
+        showToast('Joined workspace successfully!', 'success');
+        await fetchWorkspaces();
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to accept invitation', 'error');
       setLoading(false);
     }
   };
@@ -135,6 +156,39 @@ const Dashboard = () => {
             New Workspace
           </button>
         </div>
+
+        {/* Workspace Invitations Section */}
+        {invitations.length > 0 && (
+          <div className="mb-10 bg-purple-500/5 dark:bg-purple-950/10 border border-purple-500/15 rounded-xl p-5 text-left select-none">
+            <h2 className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider mb-3">
+              Workspace Invitations ({invitations.length})
+            </h2>
+            <div className="space-y-2">
+              {invitations.map((invite) => (
+                <div 
+                  key={invite._id} 
+                  className="flex items-center justify-between gap-3 p-3 bg-white dark:bg-notion-bg-sidebarDark border border-notion-border-light dark:border-notion-border-dark rounded-xl"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-2xl">{invite.icon || '💼'}</span>
+                    <div>
+                      <h4 className="text-xs font-bold text-notion-text-light dark:text-notion-text-dark">{invite.name}</h4>
+                      <p className="text-[10px] text-notion-text-mutedLight dark:text-notion-text-mutedDark mt-0.5">
+                        Invited by {invite.owner?.fullName || 'Workspace Owner'} ({invite.owner?.email})
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleAcceptInvitation(invite._id)}
+                    className="px-4 py-1.5 bg-purple-500 hover:bg-purple-600 text-white text-xs font-bold rounded-lg transition-colors"
+                  >
+                    Accept
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Workspaces List Grid */}
         {workspaces.length === 0 ? (

@@ -27,12 +27,31 @@ const WorkspaceSchema = new mongoose.Schema({
   members: [{
     user: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      ref: 'User',
+      required: true
     },
     role: {
       type: String,
       enum: Object.values(ROLES),
       default: ROLES.EDITOR
+    },
+    invitedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    invitedAt: {
+      type: Date,
+      default: Date.now
+    },
+    acceptedAt: {
+      type: Date,
+      default: null
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'accepted'],
+      default: 'pending'
     }
   }]
 }, {

@@ -13,6 +13,9 @@ import workspaceRoutes from './routes/workspaceRoutes.js';
 import folderRoutes from './routes/folderRoutes.js';
 import documentRoutes from './routes/documentRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
+import publicRoutes from './routes/publicRoutes.js';
+import commentRoutes from './routes/commentRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { initSocket } from './socket.js';
 
@@ -60,6 +63,9 @@ app.use('/api/workspaces', workspaceRoutes);
 app.use('/api/folders', folderRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/public', publicRoutes);
+app.use('/api/comments', commentRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Socket.io Connection & Authenticated Presence Logic
 initSocket(io);

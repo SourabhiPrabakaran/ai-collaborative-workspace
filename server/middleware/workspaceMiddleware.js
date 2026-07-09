@@ -18,12 +18,16 @@ const getWorkspaceUserRole = async (workspaceId, userId) => {
     return 'owner';
   }
 
-  // Check in members list
+  // Check in members list (must have accepted invitation to gain access!)
   const member = workspace.members.find(
     (m) => m.user.toString() === userId.toString()
   );
 
-  return member ? member.role : null;
+  if (member && member.status === 'accepted') {
+    return member.role;
+  }
+
+  return null;
 };
 
 /**
@@ -57,7 +61,6 @@ export const requireWorkspaceAccess = (requiredRole = ROLES.VIEWER) => {
         return next(new Error(`Access Denied: Requires role of ${requiredRole} or higher`));
       }
 
-      // Attach workspace role and object to request
       req.workspaceRole = role;
       next();
     } catch (error) {
@@ -77,7 +80,7 @@ export const requireFolderAccess = (requiredRole = ROLES.VIEWER) => {
       const userId = req.user._id;
 
       if (!folderId) {
-        // Root folder level: if creating a folder at root level, workspace ID must be provided in body instead
+        // Root folder level
         if (req.body.workspace) {
           const role = await getWorkspaceUserRole(req.body.workspace, userId);
           if (!role) {
@@ -102,7 +105,6 @@ export const requireFolderAccess = (requiredRole = ROLES.VIEWER) => {
         return next(new Error('Access Denied: You are not a member of the workspace housing this folder'));
       }
 
-      // Check role weight
       const roleWeights = { owner: 4, [ROLES.ADMIN]: 3, [ROLES.EDITOR]: 2, [ROLES.VIEWER]: 1 };
       const userWeight = roleWeights[role] || 0;
       const requiredWeight = roleWeights[requiredRole] || 1;
@@ -131,14 +133,13 @@ export const requireDocumentAccess = (requiredPermission = PERMISSIONS.READ) => 
       const userId = req.user._id;
 
       if (!documentId) {
-        // Creating document: requires workspace checks on req.body.workspace
+        // Creating document: requires workspace check
         if (req.body.workspace) {
           const role = await getWorkspaceUserRole(req.body.workspace, userId);
           if (!role) {
             res.status(403);
             return next(new Error('Access Denied: You are not a member of this workspace'));
           }
-          // Only editors and admins can create documents
           if (requiredPermission === PERMISSIONS.WRITE && role === ROLES.VIEWER) {
             res.status(403);
             return next(new Error('Access Denied: Viewers cannot create documents'));
@@ -185,13 +186,15 @@ export const requireDocumentAccess = (requiredPermission = PERMISSIONS.READ) => 
         return next(new Error('Access Denied: You do not have permissions on this document'));
       }
 
-      if (requiredPermission === PERMISSIONS.WRITE && collaborator.permission !== PERMISSIONS.WRITE) {
+      const hasWriteAccess = ['owner', 'admin', 'editor'].includes(collaborator.role);
+
+      if (requiredPermission === PERMISSIONS.WRITE && !hasWriteAccess) {
         res.status(403);
-        return next(new Error('Access Denied: Document requires write permissions'));
+        return next(new Error('Access Denied: Document requires editor role or higher'));
       }
 
       req.document = document;
-      req.docPermission = collaborator.permission;
+      req.docPermission = hasWriteAccess ? PERMISSIONS.WRITE : PERMISSIONS.READ;
       next();
     } catch (error) {
       next(error);

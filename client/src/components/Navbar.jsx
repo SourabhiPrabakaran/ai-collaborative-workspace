@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Share, Trash, Inbox, Copy, Check, Users } from 'lucide-react';
-import api from '../services/api.js';
-import { useToast } from '../context/ToastContext.jsx';
+import { Share, Trash, Inbox } from 'lucide-react';
+import ShareModal from './ShareModal.jsx';
+import NotificationBell from './NotificationBell.jsx';
 
 const Navbar = ({ 
   doc, 
@@ -11,32 +11,7 @@ const Navbar = ({
   connected, 
   onlineUsers = [] 
 }) => {
-  const { showToast } = useToast();
-  const [copied, setCopied] = useState(false);
   const [sharingOpen, setSharingOpen] = useState(false);
-  const [isPublic, setIsPublic] = useState(doc?.isPublic || false);
-
-  const togglePublicSharing = async () => {
-    try {
-      const response = await api.put(`/documents/${doc._id}`, {
-        isPublic: !isPublic
-      });
-      if (response.success && response.data) {
-        setIsPublic(response.data.isPublic);
-        showToast('Document public sharing updated', 'success');
-      }
-    } catch (err) {
-      showToast(err.message || 'Error updating document share settings', 'error');
-    }
-  };
-
-  const copyShareLink = () => {
-    const link = `${window.location.origin}/workspace/${doc.workspace}/document/${doc._id}`;
-    navigator.clipboard.writeText(link);
-    setCopied(true);
-    showToast('Link copied to clipboard', 'success');
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <header className="h-11 border-b border-notion-border-light dark:border-notion-border-dark px-4 flex justify-between items-center bg-white/70 dark:bg-notion-bg-dark/70 backdrop-blur-md select-none">
@@ -80,6 +55,9 @@ const Navbar = ({
           )}
         </div>
 
+        {/* Notification Bell */}
+        <NotificationBell />
+
         {doc?.isArchived ? (
           <button
             onClick={onRestore}
@@ -99,45 +77,23 @@ const Navbar = ({
           </button>
         )}
 
-        {/* Share Button & Popover */}
-        <div className="relative">
-          <button
-            onClick={() => setSharingOpen(!sharingOpen)}
-            className="flex items-center gap-1 text-[11px] font-semibold text-notion-text-mutedLight hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark px-2.5 py-1 rounded-md transition-colors"
-          >
-            <Share className="w-3.5 h-3.5" />
-            Share
-          </button>
+        {/* Share Button */}
+        <button
+          onClick={() => setSharingOpen(true)}
+          className="flex items-center gap-1 text-[11px] font-semibold text-notion-text-mutedLight hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark px-2.5 py-1 rounded-md transition-colors"
+        >
+          <Share className="w-3.5 h-3.5" />
+          Share
+        </button>
 
-          {sharingOpen && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setSharingOpen(false)} />
-              <div className="absolute right-0 top-7 bg-white dark:bg-notion-bg-sidebarDark border border-notion-border-light dark:border-notion-border-dark p-4 rounded-lg shadow-lg z-20 min-w-[240px] text-xs space-y-3">
-                <h4 className="font-semibold text-notion-text-light dark:text-notion-text-dark">Publish document</h4>
-                <div className="flex items-center justify-between gap-4">
-                  <span className="text-notion-text-mutedLight dark:text-notion-text-mutedDark">Share to public web</span>
-                  <input
-                    type="checkbox"
-                    checked={isPublic}
-                    onChange={togglePublicSharing}
-                    className="w-4 h-4 accent-blue-500 cursor-pointer"
-                  />
-                </div>
-                {isPublic && (
-                  <div className="pt-2 border-t border-notion-border-light dark:border-notion-border-dark flex items-center gap-1.5">
-                    <button
-                      onClick={copyShareLink}
-                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-notion-text-light dark:bg-notion-text-dark text-white dark:text-notion-bg-dark rounded font-medium hover:opacity-90 transition-opacity"
-                    >
-                      {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copied ? 'Copied' : 'Copy link'}</span>
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+        {sharingOpen && (
+          <ShareModal
+            isOpen={sharingOpen}
+            onClose={() => setSharingOpen(false)}
+            workspaceId={doc?.workspace?._id || doc?.workspace}
+            documentId={doc?._id}
+          />
+        )}
 
         {/* Delete Permanently */}
         <button

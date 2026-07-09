@@ -1,6 +1,11 @@
+import mongoose from 'mongoose';
+import crypto from 'crypto';
 import Document from '../models/Document.js';
 import Folder from '../models/Folder.js';
+import User from '../models/User.js';
 import VersionHistory from '../models/VersionHistory.js';
+import { logAudit } from '../utils/auditLogger.js';
+import { createNotification, NOTIFICATION_TYPES } from '../services/notificationService.js';
 import { validateCreateDocumentInput, validateUpdateDocumentInput } from '../validators/documentValidator.js';
 
 /**
@@ -19,7 +24,6 @@ export const createDocument = async (req, res, next) => {
     const { title, workspace, folder } = req.body;
     const userId = req.user._id;
 
-    // Verify folder resides in the same workspace (if folder is specified)
     if (folder) {
       const folderRecord = await Folder.findById(folder);
       if (!folderRecord) {
@@ -56,19 +60,15 @@ export const createDocument = async (req, res, next) => {
  */
 export const getDocumentById = async (req, res, next) => {
   try {
-    const documentId = req.params.id;
-
-    // The middleware (requireDocumentAccess) has already fetched and attached the document
     const document = req.document;
 
-    // Update lastOpened timestamp asynchronously
     document.lastOpened = Date.now();
     await document.save();
 
     res.status(200).json({
       success: true,
       data: document,
-      permission: req.docPermission // read or write permission level
+      permission: req.docPermission
     });
   } catch (error) {
     next(error);
@@ -78,7 +78,7 @@ export const getDocumentById = async (req, res, next) => {
 /**
  * @desc    Update document metadata or auto-save content
  * @route   PUT /api/documents/:id
- * @access  Private (Write permissions required)
+ * @access  Private
  */
 export const updateDocument = async (req, res, next) => {
   try {
@@ -89,10 +89,9 @@ export const updateDocument = async (req, res, next) => {
     }
 
     const { title, emoji, isPublic, isArchived, folder, content } = req.body;
-    const document = req.document; // attached by middleware
+    const document = req.document;
     const userId = req.user._id;
 
-    // If moving folder, verify destination is valid and within the same workspace
     if (folder !== undefined) {
       if (folder !== null) {
         const folderRecord = await Folder.findById(folder);
@@ -113,14 +112,12 @@ export const updateDocument = async (req, res, next) => {
     if (isPublic !== undefined) document.isPublic = isPublic;
     if (isArchived !== undefined) document.isArchived = isArchived;
     
-    // Support database direct persistence of content state (e.g. periodically auto-saved)
     if (content !== undefined) {
       const contentChanged = JSON.stringify(content) !== JSON.stringify(document.content);
       if (contentChanged) {
         document.content = content;
         document.markModified('content');
         
-        // Auto-create a Version History snapshot if contents change
         await VersionHistory.create({
           document: document._id,
           content,
@@ -144,7 +141,7 @@ export const updateDocument = async (req, res, next) => {
 /**
  * @desc    Archive document (soft delete)
  * @route   POST /api/documents/:id/archive
- * @access  Private (Write permissions required)
+ * @access  Private
  */
 export const archiveDocument = async (req, res, next) => {
   try {
@@ -166,7 +163,7 @@ export const archiveDocument = async (req, res, next) => {
 /**
  * @desc    Restore archived document
  * @route   POST /api/documents/:id/restore
- * @access  Private (Write permissions required)
+ * @access  Private
  */
 export const restoreDocument = async (req, res, next) => {
   try {
@@ -188,16 +185,13 @@ export const restoreDocument = async (req, res, next) => {
 /**
  * @desc    Delete document permanently
  * @route   DELETE /api/documents/:id
- * @access  Private (Write permissions required)
+ * @access  Private
  */
 export const deleteDocument = async (req, res, next) => {
   try {
     const documentId = req.params.id;
 
-    // 1. Delete all version history snapshots of this document
     await VersionHistory.deleteMany({ document: documentId });
-
-    // 2. Delete the document record itself
     await Document.findByIdAndDelete(documentId);
 
     res.status(200).json({
@@ -264,6 +258,302 @@ export const getArchivedDocuments = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: archived
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Share document / add collaborator
+ * @route   POST /api/documents/:id/share
+ * @access  Private (Write access required)
+ */
+export const shareDocument = async (req, res, next) => {
+  try {
+    const { email, role } = req.body;
+    const documentId = req.params.id;
+
+    if (!email || !role) {
+      res.status(400);
+      return next(new Error('Email and role are required'));
+    }
+
+    const allowedRoles = ['admin', 'editor', 'viewer'];
+    if (!allowedRoles.includes(role)) {
+      res.status(400);
+      return next(new Error('Invalid role specified'));
+    }
+
+    const document = await Document.findById(documentId);
+    if (!document) {
+      res.status(404);
+      return next(new Error('Document not found'));
+    }
+
+    const targetUser = await User.findOne({ email });
+    if (!targetUser) {
+      res.status(404);
+      return next(new Error('User not found'));
+    }
+
+    // Check if user is already a collaborator
+    const isCollab = document.collaborators.some(
+      (c) => c.user.toString() === targetUser._id.toString()
+    );
+
+    if (isCollab) {
+      res.status(409); // Conflict
+      return next(new Error('User is already a collaborator on this document'));
+    }
+
+    document.collaborators.push({
+      user: targetUser._id,
+      role
+    });
+
+    await document.save();
+
+    // Notify user of document sharing
+    if (targetUser.notificationPreferences?.documentSharing !== false) {
+      await createNotification({
+        user: targetUser._id,
+        type: NOTIFICATION_TYPES.DOCUMENT_SHARED,
+        title: 'Document Shared',
+        message: `${req.user.fullName} shared the document "${document.title || 'Untitled Document'}" with you`,
+        link: `/workspace/${document.workspace}/document/${document._id}`
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Collaborator added successfully',
+      data: document.collaborators
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get collaborators of a document
+ * @route   GET /api/documents/:id/members
+ * @access  Private (Read access required)
+ */
+export const getDocumentCollaborators = async (req, res, next) => {
+  try {
+    const document = await Document.findById(req.params.id)
+      .populate('collaborators.user', 'fullName email avatarUrl');
+
+    if (!document) {
+      res.status(404);
+      return next(new Error('Document not found'));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document.collaborators
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Update collaborator role on document
+ * @route   PATCH /api/documents/:id/member/:userId
+ * @access  Private (Write access required)
+ */
+export const updateDocumentCollaboratorRole = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const targetUserId = req.params.userId;
+    const { role } = req.body;
+
+    if (!role) {
+      res.status(400);
+      return next(new Error('Role is required'));
+    }
+
+    const allowedRoles = ['admin', 'editor', 'viewer'];
+    if (!allowedRoles.includes(role)) {
+      res.status(400);
+      return next(new Error('Invalid role specified'));
+    }
+
+    const document = await Document.findById(documentId);
+    if (!document) {
+      res.status(404);
+      return next(new Error('Document not found'));
+    }
+
+    const collaborator = document.collaborators.find(
+      (c) => c.user.toString() === targetUserId.toString()
+    );
+
+    if (!collaborator) {
+      res.status(404);
+      return next(new Error('Collaborator not found'));
+    }
+
+    collaborator.role = role;
+    await document.save();
+
+    // Notify collaborator of role change
+    const targetUserRecord = await User.findById(targetUserId);
+    if (targetUserRecord && targetUserRecord.notificationPreferences?.roleChanges !== false) {
+      await createNotification({
+        user: targetUserId,
+        type: NOTIFICATION_TYPES.ROLE_CHANGED,
+        title: 'Document Permission Updated',
+        message: `Your collaborator permission on document "${document.title || 'Untitled Document'}" was updated to "${role}"`,
+        link: `/workspace/${document.workspace}/document/${document._id}`
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Collaborator role updated successfully',
+      data: document.collaborators
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Remove collaborator from document
+ * @route   DELETE /api/documents/:id/member/:userId
+ * @access  Private (Write access required or self leaving)
+ */
+export const removeDocumentCollaborator = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const targetUserId = req.params.userId;
+
+    const document = await Document.findById(documentId);
+    if (!document) {
+      res.status(404);
+      return next(new Error('Document not found'));
+    }
+
+    const index = document.collaborators.findIndex(
+      (c) => c.user.toString() === targetUserId.toString()
+    );
+
+    if (index === -1) {
+      res.status(404);
+      return next(new Error('Collaborator not found'));
+    }
+
+    document.collaborators.splice(index, 1);
+    await document.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Collaborator removed successfully',
+      data: document.collaborators
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Toggle document public status (generate or clear token link)
+ * @route   PATCH /api/documents/:id/public
+ * @access  Private (Write access required)
+ */
+export const toggleDocumentPublicLink = async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const { isPublic } = req.body;
+
+    if (isPublic === undefined) {
+      res.status(400);
+      return next(new Error('isPublic boolean state is required'));
+    }
+
+    const document = await Document.findById(documentId);
+    if (!document) {
+      res.status(404);
+      return next(new Error('Document not found'));
+    }
+
+    if (isPublic) {
+      document.isPublic = true;
+      if (!document.publicToken) {
+        document.publicToken = crypto.randomBytes(24).toString('hex');
+      }
+    } else {
+      document.isPublic = false;
+      document.publicToken = null;
+    }
+
+    await document.save();
+
+    // Log to Audit Log
+    await logAudit({
+      user: req.user._id,
+      action: isPublic ? 'enabled public link' : 'disabled public link',
+      workspace: document.workspace,
+      document: document._id
+    });
+
+    // Notify workspace members of public status change
+    const workspace = await mongoose.model('Workspace').findById(document.workspace);
+    if (workspace) {
+      for (const member of workspace.members) {
+        if (member.user.toString() !== req.user._id.toString() && member.status === 'accepted') {
+          const u = await User.findById(member.user);
+          if (u && u.notificationPreferences?.publicLinkChanges !== false) {
+            await createNotification({
+              user: u._id,
+              type: isPublic ? NOTIFICATION_TYPES.PUBLIC_LINK_ENABLED : NOTIFICATION_TYPES.PUBLIC_LINK_DISABLED,
+              title: isPublic ? 'Document Made Public' : 'Document Made Private',
+              message: `The document "${document.title || 'Untitled Document'}" was made ${isPublic ? 'public' : 'private'} by ${req.user.fullName}`,
+              link: `/workspace/${document.workspace}/document/${document._id}`
+            });
+          }
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        isPublic: document.isPublic,
+        publicToken: document.publicToken
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Fetch public document by secure token link (No Auth)
+ * @route   GET /api/public/document/:token
+ * @access  Public
+ */
+export const getPublicDocumentByToken = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+
+    const document = await Document.findOne({
+      publicToken: token,
+      isPublic: true,
+      isArchived: false
+    }).populate('workspace', 'name icon');
+
+    if (!document) {
+      res.status(404);
+      return next(new Error('Public document not found or link has expired'));
+    }
+
+    res.status(200).json({
+      success: true,
+      data: document
     });
   } catch (error) {
     next(error);

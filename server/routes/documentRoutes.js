@@ -7,7 +7,12 @@ import {
   restoreDocument,
   deleteDocument,
   searchDocuments,
-  getArchivedDocuments
+  getArchivedDocuments,
+  shareDocument,
+  getDocumentCollaborators,
+  updateDocumentCollaboratorRole,
+  removeDocumentCollaborator,
+  toggleDocumentPublicLink
 } from '../controllers/documentController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { requireDocumentAccess } from '../middleware/workspaceMiddleware.js';
@@ -30,5 +35,12 @@ router.delete('/:id', requireDocumentAccess(PERMISSIONS.WRITE), deleteDocument);
 // Soft Archiving & Restoring
 router.post('/:id/archive', requireDocumentAccess(PERMISSIONS.WRITE), archiveDocument);
 router.post('/:id/restore', requireDocumentAccess(PERMISSIONS.WRITE), restoreDocument);
+
+// Collaborator Sharing & Public Toggles
+router.post('/:id/share', requireDocumentAccess(PERMISSIONS.WRITE), shareDocument);
+router.get('/:id/members', requireDocumentAccess(PERMISSIONS.READ), getDocumentCollaborators);
+router.patch('/:id/member/:userId', requireDocumentAccess(PERMISSIONS.WRITE), updateDocumentCollaboratorRole);
+router.delete('/:id/member/:userId', requireDocumentAccess(PERMISSIONS.WRITE), removeDocumentCollaborator);
+router.patch('/:id/public', requireDocumentAccess(PERMISSIONS.WRITE), toggleDocumentPublicLink);
 
 export default router;

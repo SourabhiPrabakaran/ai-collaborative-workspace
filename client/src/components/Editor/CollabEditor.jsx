@@ -1,3 +1,4 @@
+import { Mark, mergeAttributes } from '@tiptap/core';
 import React, { useEffect, useState, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -11,17 +12,57 @@ import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough, 
   Heading1, Heading2, Heading3, List, ListOrdered, 
   Quote, Code, Minus, Undo, Redo, CloudOff, CloudCheck,
-  Sparkles, Loader, RefreshCw, CheckCircle, Trash2, X, History
+  Sparkles, Loader, RefreshCw, CheckCircle, Trash2, X, History,
+  MessageSquare
 } from 'lucide-react';
 import api from '../../services/api.js';
 import { useToast } from '../../context/ToastContext.jsx';
 import { useSocket } from '../../context/SocketContext.jsx';
 import { useAuth } from '../../context/AuthContext.jsx';
+import CommentBubble from '../CommentBubble.jsx';
 
-const CollabEditor = ({ documentId }) => {
+// Custom ProseMirror / TipTap Mark to highlight comments and hold database references
+const CommentMark = Mark.create({
+  name: 'comment',
+
+  addAttributes() {
+    return {
+      commentId: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-comment-id'),
+        renderHTML: attributes => {
+          if (!attributes.commentId) return {};
+          return { 
+            'data-comment-id': attributes.commentId, 
+            class: 'bg-yellow-100 dark:bg-yellow-500/25 border-b-2 border-yellow-400 cursor-pointer select-text' 
+          };
+        },
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-comment-id]' }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['span', mergeAttributes(HTMLAttributes), 0];
+  },
+});
+
+const CollabEditor = ({ 
+  documentId, 
+  readOnly = false, 
+  onHighlightClick, 
+  onCommentCreated, 
+  allowViewerComments = false 
+}) => {
   const { user } = useAuth();
   const { socket, connected, joinDocument, leaveDocument } = useSocket();
   const { showToast } = useToast();
+  
+  // Custom Comment bubble trigger
+  const [commentBubbleOpen, setCommentBubbleOpen] = useState(false);
   
   // Custom Slash command menu states
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
@@ -83,13 +124,14 @@ const CollabEditor = ({ documentId }) => {
 
   // Initialize TipTap Editor with Collaboration & CollaborationCursor Extensions
   const editor = useEditor({
+    editable: !readOnly,
     extensions: [
       StarterKit.configure({
         history: false
       }),
       Underline,
       Placeholder.configure({
-        placeholder: "Type '/' for formatting commands...",
+        placeholder: readOnly ? "" : "Type '/' for formatting commands...",
         emptyNodeClass: 'my-custom-placeholder-class',
       }),
       Collaboration.configure({
@@ -102,13 +144,29 @@ const CollabEditor = ({ documentId }) => {
           name: user?.fullName || 'Collaborator',
           color: randomColor
         }
-      })
+      }),
+      CommentMark
     ],
     editorProps: {
       attributes: {
         class: 'prose dark:prose-invert max-w-none focus:outline-none min-h-[500px] text-sm leading-relaxed pb-24 text-notion-text-light dark:text-notion-text-dark',
       },
+      handleClick: (view, pos, event) => {
+        const node = view.state.doc.nodeAt(pos);
+        if (node) {
+          const commentMark = node.marks.find(m => m.type.name === 'comment');
+          if (commentMark && commentMark.attrs.commentId && onHighlightClick) {
+            onHighlightClick(commentMark.attrs.commentId);
+          }
+        }
+        return false;
+      },
       handleKeyDown: (view, event) => {
+        if (readOnly) return true;
+        if (commentBubbleOpen && event.key === 'Escape') {
+          setCommentBubbleOpen(false);
+          return true;
+        }
         if (slashMenuOpen) {
           if (event.key === 'ArrowDown') {
             event.preventDefault();
@@ -135,6 +193,7 @@ const CollabEditor = ({ documentId }) => {
       }
     },
     onSelectionUpdate: ({ editor }) => {
+      if (readOnly) return;
       const { selection } = editor.state;
       if (selection && !selection.empty) {
         const coords = editor.view.coordsAtPos(selection.from);
@@ -147,12 +206,14 @@ const CollabEditor = ({ documentId }) => {
         setAiContextType('selection');
       } else {
         setBubbleOpen(false);
+        setCommentBubbleOpen(false);
         if (aiState !== 'loading' && aiState !== 'result' && aiState !== 'error') {
           setAiState(null);
         }
       }
     },
     onUpdate: ({ editor }) => {
+      if (readOnly) return;
       const { selection } = editor.state;
       const { $from } = selection;
       const textBefore = $from.parent.textBetween(Math.max(0, $from.parentOffset - 1), $from.parentOffset, null, ' ');
@@ -170,6 +231,13 @@ const CollabEditor = ({ documentId }) => {
       }
     }
   });
+
+  // Dynamic Read-Only state update
+  useEffect(() => {
+    if (editor) {
+      editor.setEditable(!readOnly);
+    }
+  }, [readOnly, editor]);
 
   // Apply selected slash command formatting
   const triggerSlashCommand = (index) => {
@@ -322,6 +390,54 @@ const CollabEditor = ({ documentId }) => {
     setAiResponse('');
   };
 
+  // Submit comment draft and set TipTap highlight mark
+  const handleCommentSubmit = async (content) => {
+    if (readOnly && !allowViewerComments) {
+      showToast('Viewers are not permitted to comment on this document', 'error');
+      return;
+    }
+
+    try {
+      const res = await api.post(`/comments/${documentId}`, { content });
+      if (res.success && res.data) {
+        const commentId = res.data._id;
+        
+        // Overlapping Comment Support
+        const hasMark = editor.state.doc.rangeHasMark(
+          editor.state.selection.from, 
+          editor.state.selection.to, 
+          editor.schema.marks.comment
+        );
+        let commentIdString = commentId;
+
+        if (hasMark) {
+          let currentIds = [];
+          editor.state.doc.nodesBetween(editor.state.selection.from, editor.state.selection.to, (node) => {
+            const m = node.marks.find(mark => mark.type.name === 'comment');
+            if (m && m.attrs.commentId) {
+              currentIds.push(m.attrs.commentId);
+            }
+          });
+          if (currentIds.length > 0) {
+            const merged = Array.from(new Set([...currentIds.join(',').split(','), commentId])).filter(Boolean);
+            commentIdString = merged.join(',');
+          }
+        }
+
+        // Apply mark
+        editor.chain().focus().setMark('comment', { commentId: commentIdString }).run();
+        showToast('Comment added successfully', 'success');
+        setCommentBubbleOpen(false);
+
+        if (onCommentCreated) {
+          onCommentCreated(commentId);
+        }
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to submit comment', 'error');
+    }
+  };
+
   // Configure local user details inside awareness state field
   useEffect(() => {
     if (awareness && user) {
@@ -447,119 +563,121 @@ const CollabEditor = ({ documentId }) => {
       </div>
 
       {/* Manual Toolbar */}
-      <div className="border-b border-notion-border-light dark:border-notion-border-dark pb-2 mb-4 flex flex-wrap gap-1 items-center select-none">
-        <button
-          onClick={() => editor.chain().focus().toggleBold().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('bold') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Bold"
-        >
-          <Bold className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleItalic().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('italic') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Italic"
-        >
-          <Italic className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleUnderline().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('underline') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Underline"
-        >
-          <UnderlineIcon className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleStrike().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('strike') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Strike"
-        >
-          <Strikethrough className="w-4 h-4" />
-        </button>
+      {!readOnly && (
+        <div className="border-b border-notion-border-light dark:border-notion-border-dark pb-2 mb-4 flex flex-wrap gap-1 items-center select-none">
+          <button
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('bold') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Bold"
+          >
+            <Bold className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('italic') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Italic"
+          >
+            <Italic className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleUnderline().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('underline') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Underline"
+          >
+            <UnderlineIcon className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('strike') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Strike"
+          >
+            <Strikethrough className="w-4 h-4" />
+          </button>
 
-        <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
+          <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
 
-        <button
-          onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 1 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Heading 1"
-        >
-          <Heading1 className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 2 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Heading 2"
-        >
-          <Heading2 className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 3 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Heading 3"
-        >
-          <Heading3 className="w-4 h-4" />
-        </button>
+          <button
+            onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 1 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Heading 1"
+          >
+            <Heading1 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 2 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Heading 2"
+          >
+            <Heading2 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('heading', { level: 3 }) ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Heading 3"
+          >
+            <Heading3 className="w-4 h-4" />
+          </button>
 
-        <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
+          <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
 
-        <button
-          onClick={() => editor.chain().focus().toggleBulletList().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('bulletList') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Bullet List"
-        >
-          <List className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleOrderedList().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('orderedList') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Numbered List"
-        >
-          <ListOrdered className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleBlockquote().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('blockquote') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Quote"
-        >
-          <Quote className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-          className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('codeBlock') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
-          title="Code Block"
-        >
-          <Code className="w-4 h-4" />
-        </button>
+          <button
+            onClick={() => editor.chain().focus().toggleBulletList().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('bulletList') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Bullet List"
+          >
+            <List className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleOrderedList().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('orderedList') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Numbered List"
+          >
+            <ListOrdered className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleBlockquote().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('blockquote') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Quote"
+          >
+            <Quote className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+            className={`p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark ${editor?.isActive('codeBlock') ? 'bg-notion-hover-light dark:bg-notion-hover-dark text-blue-500' : ''}`}
+            title="Code Block"
+          >
+            <Code className="w-4 h-4" />
+          </button>
 
-        <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
+          <span className="w-px h-4 bg-notion-border-light dark:bg-notion-border-dark mx-1"></span>
 
-        <button
-          onClick={() => editor.chain().focus().setHorizontalRule().run()}
-          className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
-          title="Divider line"
-        >
-          <Minus className="w-4 h-4" />
-        </button>
+          <button
+            onClick={() => editor.chain().focus().setHorizontalRule().run()}
+            className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
+            title="Divider line"
+          >
+            <Minus className="w-4 h-4" />
+          </button>
 
-        <button
-          onClick={() => editor.chain().focus().undo().run()}
-          className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
-          title="Undo"
-        >
-          <Undo className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => editor.chain().focus().redo().run()}
-          className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
-          title="Redo"
-        >
-          <Redo className="w-4 h-4" />
-        </button>
-      </div>
+          <button
+            onClick={() => editor.chain().focus().undo().run()}
+            className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
+            title="Undo"
+          >
+            <Undo className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => editor.chain().focus().redo().run()}
+            className="p-1.5 rounded hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark"
+            title="Redo"
+          >
+            <Redo className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Floating Selection Bubble Menu & Nested AI Panel */}
-      {bubbleOpen && (
+      {bubbleOpen && !readOnly && (
         <div 
           className="absolute z-35 bg-white dark:bg-notion-bg-sidebarDark border border-notion-border-light dark:border-notion-border-dark shadow-md rounded-lg overflow-hidden flex flex-col p-1.5 select-none w-auto"
           style={{ 
@@ -603,6 +721,15 @@ const CollabEditor = ({ documentId }) => {
                 <Sparkles className="w-3.5 h-3.5 animate-pulse" />
                 AI Assistant
               </button>
+              {(!readOnly || allowViewerComments) && (
+                <button
+                  onClick={() => setCommentBubbleOpen(true)}
+                  className="px-2 py-1 hover:bg-notion-hover-light dark:hover:bg-notion-hover-dark text-[10px] text-blue-500 font-bold flex items-center gap-1 transition-colors pl-2"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Comment
+                </button>
+              )}
             </div>
           ) : (
             /* Context Selector Header (drawn on all AI states except Loading/Results) */
@@ -816,7 +943,7 @@ const CollabEditor = ({ documentId }) => {
       )}
 
       {/* Slash Command Overlay */}
-      {slashMenuOpen && (
+      {slashMenuOpen && !readOnly && (
         <div 
           className="absolute z-40 bg-white dark:bg-notion-bg-sidebarDark border border-notion-border-light dark:border-notion-border-dark rounded-xl shadow-lg w-56 py-1 select-none flex flex-col"
           style={{ 
@@ -844,6 +971,15 @@ const CollabEditor = ({ documentId }) => {
       <div className="pt-4">
         <EditorContent editor={editor} />
       </div>
+
+      {/* Floating Comment Draft Bubble */}
+      {commentBubbleOpen && !readOnly && (
+        <CommentBubble
+          coords={bubbleCoords}
+          onSubmit={handleCommentSubmit}
+          onClose={() => setCommentBubbleOpen(false)}
+        />
+      )}
     </div>
   );
 };

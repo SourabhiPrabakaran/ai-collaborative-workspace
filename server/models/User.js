@@ -22,6 +22,13 @@ const UserSchema = new mongoose.Schema({
   avatarUrl: {
     type: String,
     default: ''
+  },
+  notificationPreferences: {
+    mentions: { type: Boolean, default: true },
+    invitations: { type: Boolean, default: true },
+    documentSharing: { type: Boolean, default: true },
+    roleChanges: { type: Boolean, default: true },
+    publicLinkChanges: { type: Boolean, default: true }
   }
 }, {
   timestamps: true

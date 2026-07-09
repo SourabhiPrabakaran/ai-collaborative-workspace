@@ -12,6 +12,7 @@ const Login = lazy(() => import('./pages/Login.jsx'));
 const Signup = lazy(() => import('./pages/Signup.jsx'));
 const Dashboard = lazy(() => import('./pages/Dashboard.jsx'));
 const WorkspacePage = lazy(() => import('./pages/WorkspacePage.jsx'));
+const PublicDocumentPage = lazy(() => import('./pages/PublicDocumentPage.jsx'));
 const NotFound = lazy(() => import('./pages/NotFound.jsx'));
 
 // Guest Route: Redirect authenticated users away from Login/Signup
@@ -90,6 +91,9 @@ function App() {
                     </ProtectedRoute>
                   }
                 />
+
+                {/* Public read-only route */}
+                <Route path="/public/document/:token" element={<PublicDocumentPage />} />
 
                 {/* 404 Route */}
                 <Route path="/404" element={<NotFound />} />

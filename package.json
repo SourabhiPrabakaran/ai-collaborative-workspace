@@ -1,0 +1,11 @@
+{
+  "name": "ai-collaborative-workspace",
+  "version": "1.0.0",
+  "description": "AI-Powered Collaborative Workspace similar to Notion",
+  "main": "server/server.js",
+  "scripts": {
+    "server": "npm run dev --prefix server",
+    "server:start": "npm start --prefix server"
+  },
+  "private": true
+}

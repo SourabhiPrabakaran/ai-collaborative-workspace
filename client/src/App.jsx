@@ -48,6 +48,9 @@ function App() {
             <SocketProvider>
               <Suspense fallback={<LoadingScreen message="Loading page assets..." />}>
               <Routes>
+                {/* Root Redirect */}
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
+
                 {/* Guest-only routes */}
                 <Route
                   path="/login"

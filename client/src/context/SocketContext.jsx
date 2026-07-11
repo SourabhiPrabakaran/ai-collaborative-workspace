@@ -13,7 +13,12 @@ export const useSocket = () => {
   return context;
 };
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const getSocketUrl = () => {
+  const url = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+  return url.replace(/\/api\/?$/, '');
+};
+
+const SOCKET_URL = getSocketUrl();
 
 export const SocketProvider = ({ children }) => {
   const { user } = useAuth();

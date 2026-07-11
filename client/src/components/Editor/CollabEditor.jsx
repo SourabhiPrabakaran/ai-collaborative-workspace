@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Placeholder from '@tiptap/extension-placeholder';
 import Collaboration from '@tiptap/extension-collaboration';
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import CollaborationCaret from '@tiptap/extension-collaboration-caret';
 import * as Y from 'yjs';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import { 
@@ -150,8 +150,8 @@ const CollabEditor = ({
         document: ydoc,
         field: 'default'
       }),
-      CollaborationCursor.configure({
-        awareness,
+      CollaborationCaret.configure({
+        provider: { awareness },
         user: {
           name: user?.fullName || 'Collaborator',
           color: randomColor

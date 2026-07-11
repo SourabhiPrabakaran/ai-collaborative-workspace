@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@tiptap/extension-collaboration": "^3.27.3",
-    "@tiptap/extension-collaboration-cursor": "^2.26.2",
+    "@tiptap/extension-collaboration-caret": "^3.27.3",
     "@tiptap/extension-placeholder": "^3.27.3",
     "@tiptap/extension-underline": "^3.27.3",
     "@tiptap/react": "^3.27.3",
